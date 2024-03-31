@@ -1,12 +1,8 @@
 package merkledag
 
 import (
+	"encoding/json"
 	"hash"
-)
-
-const (
-	K          = 1 << 10
-	BLOCK_SIZE = 256 * K
 )
 
 type Link struct {
@@ -21,73 +17,35 @@ type Object struct {
 }
 
 func Add(store KVStore, node Node, h hash.Hash) []byte {
-	switch node.Type() {
-	case FILE:
-		return StoreFile(store, node.(File), h)
-	case DIR:
-		return StoreDir(store, node.(Dir), h)
-	default:
-		return nil
-	}
-}
-
-func StoreFile(store KVStore, file File, h hash.Hash) []byte {
-	data := file.Bytes()
-	if file.Size() <= BLOCK_SIZE {
-		h.Reset()
+	// 如果是文件,直接存储文件内容
+	if node.Type() == FILE {
+		file, _ := node.(File)
+		data := file.Bytes()
 		h.Write(data)
-		hashSum := h.Sum(nil)
-
-		if err := store.Put(hashSum, data); err != nil {
-			panic(err)
-		}
-
-		return hashSum
-	} else {
-		t := []byte("blob")
-		if file.Size() > BLOCK_SIZE {
-			t = []byte("list")
-		}
-		return t
+		store.Put(h.Sum(nil), data)
+		return h.Sum(nil)
 	}
-}
 
-func StoreDir(store KVStore, dir Dir, h hash.Hash) []byte {
-	it := dir.It()
+	// 如果是目录,则递归存储子节点
+	dir, _ := node.(Dir)
 	var links []Link
-
-	for it.Next() {
+	for it := dir.It(); it.Next(); {
 		node := it.Node()
-		link := Link{
-			Hash: Add(store, node, h),
-			Size: int(node.Size()),
-		}
-		links = append(links, link)
+		hash := Add(store, node, h)
+		size := node.Size()
+		links = append(links, Link{
+			Name: node.Name(),
+			Hash: hash,
+			Size: int(size),
+		})
 	}
 
 	obj := Object{
 		Links: links,
 	}
-
-	// Define tree and store the object in KVStore
-	hashSum := calculateHash(h, obj)
-	if err := store.Put(hashSum, encodeObject(obj)); err != nil {
-		panic(err)
-	}
-
-	return hashSum
-}
-
-func calculateHash(h hash.Hash, obj Object) []byte {
-	h.Reset()
-	for _, link := range obj.Links {
-		h.Write(link.Hash)
-	}
-	return h.Sum(nil)
-}
-
-func encodeObject(obj Object) []byte {
-	// Encode object as needed for storage in KVStore
-	// This is a placeholder function and needs to be implemented based on the actual requirements
-	return []byte{}
+	data, _ := json.Marshal(obj)
+	h.Write(data)
+	objectHash := h.Sum(nil)
+	store.Put(objectHash, data)
+	return objectHash
 }
